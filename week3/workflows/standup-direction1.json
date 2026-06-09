@@ -203,6 +203,52 @@
     },
     {
       "parameters": {
+        "jsCode": "// ── HARNESS: INPUT VALIDATION ──────────────────────────────────────────\n// Backpressure gate #1. Assert the merged activity is well-formed BEFORE\n// spending a Claude call. Emits `valid` (read by the Input Gate IF node)\n// and `errors`. Fault-injection hook: set env STANDUP_FORCE_FAIL=input to\n// force a red run for the red→green demo.\nconst j = $json;\nconst errors = [];\nif ($env.STANDUP_FORCE_FAIL === 'input') errors.push('forced failure (STANDUP_FORCE_FAIL=input)');\nif (typeof j.activity !== 'string' || j.activity.trim() === '') errors.push('activity missing/empty');\nif (!j.counts || typeof j.counts.total !== 'number') errors.push('counts.total missing/non-numeric');\nif (!Array.isArray(j.items)) errors.push('items is not an array');\nconst valid = errors.length === 0;\nconsole.log(`[standup][input] valid=${valid} total=${j.counts && j.counts.total} errors=${JSON.stringify(errors)}`);\nreturn [{ json: { ...j, valid, stage: 'input', errors } }];\n"
+      },
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "input-gate-cond",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "name": "Input Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        20
+      ]
+    },
+    {
+      "parameters": {
         "connectionMode": "docker",
         "operation": "resumeSession",
         "sessionId": "7b3e9c2a-1d4f-4a6b-9c8e-2f0a5d7b1e30",
@@ -218,8 +264,8 @@
       "type": "n8n-nodes-claude-code-cli.claudeCode",
       "typeVersion": 1,
       "position": [
-        900,
-        20
+        1300,
+        -80
       ],
       "credentials": {
         "claudeCodeDockerApi": {
@@ -227,6 +273,52 @@
           "name": "Claude Code Docker (claude-code-runner)"
         }
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── HARNESS: OUTPUT VALIDATION ─────────────────────────────────────────\n// Backpressure gate #2. Assert Claude actually produced a well-formed\n// standup (success flag + all three sections + non-empty) BEFORE posting\n// to Slack — so a bad run is caught instead of posting garbage. Emits\n// `valid` (read by the Output Gate IF node). Fault-injection hook:\n// STANDUP_FORCE_FAIL=output forces a red run for the red→green demo.\nconst j = $json;\nconst text = typeof j.output === 'string' ? j.output : '';\nconst errors = [];\nif ($env.STANDUP_FORCE_FAIL === 'output') errors.push('forced failure (STANDUP_FORCE_FAIL=output)');\nif (j.success === false) errors.push('claude reported success=false');\nif (text.trim() === '') errors.push('empty standup text');\nfor (const section of ['Yesterday', 'Today', 'Blockers']) {\n  if (!text.includes(section)) errors.push(`missing required section: ${section}`);\n}\nconst valid = errors.length === 0;\nconsole.log(`[standup][output] valid=${valid} len=${text.length} errors=${JSON.stringify(errors)}`);\nreturn [{ json: { ...j, valid, stage: 'output', errors } }];\n"
+      },
+      "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "name": "Validate Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "output-gate-cond",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "name": "Output Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        -80
+      ]
     },
     {
       "parameters": {
@@ -262,8 +354,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1120,
-        20
+        1900,
+        -80
       ]
     },
     {
@@ -276,8 +368,59 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
       "position": [
-        1340,
-        20
+        2120,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SLACK_BOT_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{ $env.SLACK_POST_CHANNEL_ID }}"
+            },
+            {
+              "name": "text",
+              "value": "=⚠️ Standup run BLOCKED at {{ $json.stage }} validation — nothing posted. Errors: {{ ($json.errors || ['unknown']).join('; ') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      "name": "Handle Error (Alert)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Standup blocked at {{ $json.stage }} validation: {{ ($json.errors || ['unknown']).join('; ') }}"
+      },
+      "id": "10101010-1010-4101-8101-101010101010",
+      "name": "Stop And Error",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1500,
+        260
       ]
     }
   ],
@@ -352,7 +495,36 @@
       "main": [
         [
           {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Input Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Gate": {
+      "main": [
+        [
+          {
             "node": "Generate Standup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Error (Alert)",
             "type": "main",
             "index": 0
           }
@@ -363,7 +535,36 @@
       "main": [
         [
           {
+            "node": "Validate Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Output": {
+      "main": [
+        [
+          {
+            "node": "Output Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Gate": {
+      "main": [
+        [
+          {
             "node": "Post Standup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Error (Alert)",
             "type": "main",
             "index": 0
           }
@@ -375,6 +576,17 @@
         [
           {
             "node": "Respond Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Error (Alert)": {
+      "main": [
+        [
+          {
+            "node": "Stop And Error",
             "type": "main",
             "index": 0
           }

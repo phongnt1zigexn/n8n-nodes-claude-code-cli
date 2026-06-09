@@ -132,6 +132,35 @@ docker exec claude-code-runner \
 
 ---
 
+## 10. Harness / backpressure — red→green demo  **[YOU]**  — Step 3
+
+The workflow has a built-in backpressure harness: **Validate Input** + **Validate Output** Code nodes each feed a boolean `valid` to an **IF gate**; on `valid=false` the run goes to **Handle Error (Alert)** (posts a Slack `⚠️ BLOCKED` alert) → **Stop And Error** (reds the execution). The `Post Standup` node is never reached, so bad data is caught instead of posted.
+
+> If you ran the workflow before this harness was added, re-import `workflows/standup-direction1.json` in the n8n UI (Workflow → ⋯ → Import from File) so the new nodes load.
+
+**Show the gate catches a failure (RED):**
+```bash
+cd "n8n-nodes-claude-code-cli/docker/production/n8n-with-claude-code"
+# force gate #2 to fail (use "input" to force gate #1 instead)
+( grep -v '^STANDUP_FORCE_FAIL=' .env; echo 'STANDUP_FORCE_FAIL=output' ) > .env.tmp && mv .env.tmp .env
+docker compose up -d                       # reload env
+curl -s -X POST http://localhost:5678/webhook/standup-run -d '{}'; echo
+docker compose logs --tail=20 n8n | grep '\[standup\]'   # observability line
+```
+Expect: execution status **error** (red), `Output Gate` false branch, `Post Standup` **not executed**, Slack gets the `⚠️ … BLOCKED at output validation` alert. **Screenshot the red execution log + the alert.** (Step 3 #2)
+
+**Fix it and show green:**
+```bash
+( grep -v '^STANDUP_FORCE_FAIL=' .env; echo 'STANDUP_FORCE_FAIL=' ) > .env.tmp && mv .env.tmp .env
+docker compose up -d
+curl -s -X POST http://localhost:5678/webhook/standup-run -d '{}'; echo
+```
+Expect: status **success** (all nodes green), both gates true, real standup posts to Slack. **Screenshot it.** (Step 3 #3)
+
+The red → green pair is the backpressure proof. **Bonus (observability):** both validators log `[standup][input] valid=… errors=…` to the execution console every run (`docker compose logs -f n8n`).
+
+---
+
 ## Phased-workflow log (AC-06)
 
 | Phase | What was done | Tool |

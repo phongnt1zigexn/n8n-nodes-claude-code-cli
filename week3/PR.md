@@ -37,7 +37,7 @@
 
 ## Build — Part 1 (Direction 1: N8N → Claude)
 - **Workflow name:** Daily Standup Bot — Direction 1 (N8N → Claude)
-- **Nodes:** Schedule Trigger 9AM, Manual Trigger, Webhook (MCP entry), GitHub Commits (HTTP), Redmine Issues (HTTP), Slack Messages (HTTP), Merge & Dedup (Code), Generate Standup (Claude Code), Post Standup (HTTP `chat.postMessage`), Respond Done.
+- **Nodes:** Schedule Trigger 9AM, Manual Trigger, Webhook (MCP entry), GitHub Commits (HTTP), Redmine Issues (HTTP), Slack Messages (HTTP), Merge & Dedup (Code), **Validate Input (Code)**, **Input Gate (IF)**, Generate Standup (Claude Code), **Validate Output (Code)**, **Output Gate (IF)**, Post Standup (HTTP `chat.postMessage`), Respond Done, **Handle Error (Alert, HTTP `chat.postMessage`)**, **Stop And Error**. (The 6 bold nodes are the backpressure harness — see *Harness / Backpressure* below.)
 - **Claude prompt (user):** activity block + *"Write my daily standup in EXACTLY three sections (Yesterday / Today / Blockers)…"*; **system prompt (replace):** standup assistant, use ONLY provided data, never fabricate, remember prior standups in the session.
 - **Execution log result:** ✅ all green (n8n execution status `success`, all 7 nodes ran). Verified live via webhook `POST /webhook/standup-run` → HTTP 200 `Done. Standup posted to Slack ✅`. Real standup generated and posted to Slack DM `D0B8TCDMJ2J`:
   ```
@@ -74,6 +74,30 @@
   > From the standup I just generated moments ago — **Yesterday:** Merged PR #42: fix login timeout on staging; Reviewed design doc #99405, left comments. **Blockers:** Waiting on infra to whitelist the new webhook IP.
 
   Claude referenced the prior standup's exact items (not generic) — AC-05-4 / AC-08-4 ✓.
+
+## Harness / Backpressure (Step 3)
+
+A real, runnable feedback loop with **both required parts**:
+
+**(1) Automated validation — two gates assert the data is well-formed:**
+- **Validate Input** (Code, after Merge & Dedup, before Claude): asserts `activity` is a non-empty string, `counts.total` is numeric, `items` is an array. Stops a malformed merge from wasting a Claude call.
+- **Validate Output** (Code, after Claude, before Slack): asserts `success !== false`, the standup text is non-empty, and **all three sections** (`Yesterday` / `Today` / `Blockers`) are present. Stops garbage from being posted.
+- Each emits a boolean `valid` + an `errors[]` array, read by an **IF "gate"** node (`Input Gate`, `Output Gate`).
+
+**(2) A gate that runs on every execution and blocks on failure:**
+- Each IF gate routes `valid=false` to the **error branch**: **Handle Error (Alert)** posts `⚠️ Standup run BLOCKED at <stage> validation — nothing posted. Errors: …` to Slack, then **Stop And Error** terminates the run → **execution log goes red**. The Slack `Post Standup` node is never reached. So a failed check **stops the standup from posting and surfaces a red execution log + alert** — exactly the required gate behaviour.
+
+**Demonstration that backpressure actually works (red → green):**
+- Fault-injection hook: env var `STANDUP_FORCE_FAIL` (`input` or `output`) forces the matching gate to fail — no need to corrupt real data.
+  1. **Break it:** set `STANDUP_FORCE_FAIL=output` → `docker compose up -d` → run the workflow.
+     - **Captured (RED):** execution status `error`; `Output Gate` takes the false branch; `Post Standup` shows as **not executed**; Slack receives the `⚠️ … BLOCKED at output validation` alert instead of a standup. `[ATTACH RED: execution log + alert screenshot]`
+  2. **Fix it:** unset `STANDUP_FORCE_FAIL` (blank line) → `docker compose up -d` → run again.
+     - **Captured (GREEN):** execution status `success`; both gates take the true branch; the real 3-section standup posts to Slack. `[ATTACH GREEN: all-nodes-green + posted standup screenshot]`
+- The red → green pair is the proof the harness provides backpressure.
+
+**Bonus — logging / observability:** both validators emit a structured line to the n8n execution console on every run, e.g. `[standup][input] valid=true total=2 errors=[]` / `[standup][output] valid=false len=0 errors=["forced failure (STANDUP_FORCE_FAIL=output)"]`. Tail with `docker compose logs -f n8n`.
+
+> Mirrored, readable copy of both validators: `week3/code-node-validate.js`. Step-by-step demo in `week3/RUNBOOK.md` §10.
 
 ## Acceptance criteria (Default path — 11)
 - [x] 1. Schedule **or** Chat trigger — Schedule 9AM + Manual + Webhook
