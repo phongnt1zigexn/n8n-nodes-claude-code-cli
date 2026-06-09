@@ -1,0 +1,20 @@
+# Override merged automatically by `docker compose`.
+# Purpose: inject the Week-3 secrets/config into the n8n container and allow
+# HTTP Request nodes to read them via {{$env.X}} expressions.
+#
+# Copy the project .env.template -> .env (in THIS directory) and fill it before `up`.
+
+services:
+  n8n:
+    env_file:
+      - .env
+    environment:
+      # n8n runs as root here (user: root for docker socket), so its default user
+      # folder is /root/.n8n on the EPHEMERAL container layer — wiped on recreate.
+      # Point it at the persisted volume (mounted at /home/node/.n8n) so owner,
+      # community node, credentials and workflows survive `docker compose up`.
+      - N8N_USER_FOLDER=/home/node/.n8n
+      # Allow $env access inside node expressions (HTTP Request auth headers, URLs)
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # Permit the community node package
+      - N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true
